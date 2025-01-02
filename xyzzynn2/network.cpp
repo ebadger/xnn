@@ -113,11 +113,11 @@ void Network::Clear()
 
 void Network::OutputNetworkInfo()
 {
-	wprintf(L"Layers: %d [", _vecLayers.size());
+	wprintf(L"Layers: %d [", (uint32_t)_vecLayers.size());
 	
 	for (Layer* l : _vecLayers)
 	{
-		wprintf(L" %d ", l->_vecNeurons.size());
+		wprintf(L" %d ", (uint32_t)l->_vecNeurons.size());
 	}
 
 	wprintf(L"]\r\n");
