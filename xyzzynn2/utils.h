@@ -9,5 +9,5 @@ public:
 	static double Sigmoid(double x);
 	static double SigmoidDerivative(double x);
 	static double Relu(double x, double max);
-
+	static double ReluDerivative(double x, double max);
 };

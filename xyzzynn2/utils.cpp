@@ -46,3 +46,8 @@ double Utils::Relu(double x, double max)
 	return r < 0 ? 0 : r;
 }
 
+double Utils::ReluDerivative(double x, double max) 
+{
+	double r = x / max;
+	return r < 0 ? 0 : (1.0 / max);
+}

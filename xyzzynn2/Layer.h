@@ -17,4 +17,5 @@ public:
 
 	vector<Neuron *> _vecNeurons;
 	double m_multiplier = 0.0;
+	double _totalNeuronScore = 0.0;
 };

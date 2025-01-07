@@ -261,7 +261,7 @@ double Network::BatchForward(imagesample* pSample, uint8_t label)
 			expected = 1.0;
 		}
 
-		cost = expected - out;
+		cost = out - expected;
 
 		
 		if (isnan(cost))
@@ -269,11 +269,24 @@ double Network::BatchForward(imagesample* pSample, uint8_t label)
 			cost = 0;
 		}
 
-		pNeuron->_vecCostBatch.push_back(cost);
+		pNeuron->_vecCostBatch.push_back(2.0 * cost);
 
 		cost = (cost * cost);
+
 		totalcost += cost;
 		digit++;
+
+
+		// cache the average neuron weight for each neuron in the layer
+		for (Layer* l : _vecLayers)
+		{
+			l->_totalNeuronScore = 0.0;
+			for (Neuron* n : l->_vecNeurons)
+			{
+				l->_totalNeuronScore += n->_value;
+			}
+		}
+
 	}
 
 	//wprintf(L"\n");

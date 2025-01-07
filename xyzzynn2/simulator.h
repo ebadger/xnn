@@ -10,7 +10,7 @@ public:
 	void DumpData();	
 	void CreateNetwork();
 	double CalculateTotalCost();
-	void Learn(double rate, int32_t epochs);
+	void Learn(double rate, int32_t epochs, int32_t trainLimit);
 	void DumpNetwork();
 	void AccuracyTest(bool fSaveMax, bool fDumpWrong);
 	void DumpSample(imagesample *);

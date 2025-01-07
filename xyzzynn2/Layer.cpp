@@ -36,6 +36,7 @@ void Layer::DeSerialize(ifstream &stream, Layer *pParent)
 	for (int i = 0; i < neurons; i++)
 	{
 		Neuron *p = new Neuron();
+		p->_pLayer = this;
 		_vecNeurons.push_back(p);
 		p->DeSerialize(stream, pParent);
 	}

@@ -72,25 +72,67 @@ void Neuron::SetValueFromSample(imagesample *pSample, int index)
 	//_value = Utils::Sigmoid(pSample->pixels[index]);
 }
 
+
+void Neuron::BackPropagateError(double error, int layer, double rate)
+{
+	for (Connection* p : _vecConnectionsBackward)
+	{
+		
+		double d = p->_parent->_value * error;
+
+		p->_weight -= rate * d;
+		p->_weight = max(p->_weight, DBL_EPSILON);
+		p->_parent->BackPropagateError(d, layer + 1, rate);
+	}
+}
+
 #if 0
 
 void Neuron::BackPropagateError(double error, int layer, double rate)
 {
-	for (Connection *p : _vecConnectionsBackward)
+	for (Connection* p : _vecConnectionsBackward)
 	{
-		double adjust =  rate * (p->_parent->_value + .0000000001) * error;
+		//double adjust =  -1.0 * rate * error * Utils::ReluDerivative(p->_parent->_value + DBL_EPSILON, (double)p->_parent->_vecConnectionsBackward.size());
+	
+		// todo: instead of making the adjustment proportional to the number of neurons in the layer
+		// sum the neuron values and calculate the parent neuron's proportion to the other values
+		// use that to adjust proportional to not only the number of neurons, but that neuron's relative
+		// weight
 
-		if (!isnan(p->_weight + adjust))
+		double errorWeight = 100.0 * p->_parent->_value * p->_parent->_pLayer->_totalNeuronScore;
+
+		// take the error, and normalize it based on the number of neurons in this layer
+		// make the error proportional to that number
+		double propError = (error * errorWeight);
+
+		if (!isnan(p->_weight + propError * rate))
 		{
-			p->_weight += adjust;
+			// TODO: this weight update needs to happen at the end, otherwise the weights are changing
+			// alternatively and better, the average could be calculated at each layer and then used during
+			// back prop
+
+			p->_weight += propError * rate;
 		}
 
-		p->_parent->BackPropagateError(error * p->_parent->_value, layer+1, rate);
+		p->_parent->BackPropagateError(error, layer + 1, rate);
 	}
 }
 
-#endif
+void Neuron::BackPropagateError(double error, int layer, double rate)
+{
+	for (Connection* p : _vecConnectionsBackward)
+	{
+		//double adjust =  -1.0 * rate * error * Utils::ReluDerivative(p->_parent->_value + DBL_EPSILON, (double)p->_parent->_vecConnectionsBackward.size());
+		double adjust = error * (p->_parent->_value + DBL_EPSILON) * (double)(p->_parent->_vecConnectionsBackward.size() + 1.0);
 
+		if (!isnan(p->_weight + adjust * rate))
+		{
+			p->_weight += adjust * rate;
+		}
+
+		p->_parent->BackPropagateError(adjust, layer + 1, rate);
+	}
+}
 
 void Neuron::BackPropagateError(double error, int layer, double rate)
 {
@@ -102,7 +144,7 @@ void Neuron::BackPropagateError(double error, int layer, double rate)
 	}
 	else
 	{
-		localGradient = Utils::SigmoidDerivative(_value) * error; // For hidden layers
+		localGradient = 2.0 * error * Utils::SigmoidDerivative(_value); // For hidden layers
 	}
 
 	// First, calculate errors for all parent neurons without updating weights
@@ -133,3 +175,4 @@ void Neuron::BackPropagateError(double error, int layer, double rate)
 	}
 }
 
+#endif

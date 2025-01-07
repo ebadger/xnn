@@ -89,8 +89,8 @@ void Simulator::CreateNetwork()
 {
 	_pNetwork = new Network();
 	_pNetwork->AddLayer(784, 0); // input layer
-	//_pNetwork->AddLayer(16, 0);  // hidden layer
-	_pNetwork->AddLayer(100, 0);  // hidden layer
+	_pNetwork->AddLayer(20, 0);  // hidden layer
+	_pNetwork->AddLayer(10, 0);  // hidden layer
 	_pNetwork->AddLayer(10, 0);  // output layer
 
 	_pNetwork->CreateConnections();
@@ -119,7 +119,7 @@ double Simulator::CalculateTotalCost()
 	return totalcost;
 }
 
-void Simulator::Learn(double rate, int32_t epochs)
+void Simulator::Learn(double rate, int32_t epochs, int32_t trainLimit)
 {
 	//DumpNetwork();
 
@@ -131,10 +131,15 @@ void Simulator::Learn(double rate, int32_t epochs)
 		double totalcost = 0;
 		int samples = 0;
 
-		vector<int> vecOrder;
-		uint32_t iTraining = min(_imagesTraining.Items(), 10000);
+		if (trainLimit == 0)
+		{
+			trainLimit = _imagesTraining.Items();
+		}
 
-		for (uint32_t i = 0; i < iTraining; i++)
+		vector<int> vecOrder;
+		uint32_t iTraining = min(_imagesTraining.Items(), (uint32_t)trainLimit);
+
+		for (uint32_t i = 0; i < _imagesTraining.Items(); i++)
 		{
 			vecOrder.push_back(i);
 		}
@@ -161,12 +166,12 @@ void Simulator::Learn(double rate, int32_t epochs)
 
 			_pNetwork->BatchBackward(rate);
 			
-			if (i == 99)
+			if (i == 29)
 			{
-				uint32_t sec = ((GetTickCount() - timeStarted) / 100);
-				wprintf(L"Sample: %d ms, estimated epoch time: %d minutes\r\n", 
+				uint32_t sec = ((GetTickCount() - timeStarted) / 30);
+				wprintf(L"Sample: %d ms, estimated epoch time: %f minutes\r\n", 
 					sec, 
-					(sec * iTraining) / 60000);
+					(sec * iTraining) / 60000.0f);
 			}
 		}
 
