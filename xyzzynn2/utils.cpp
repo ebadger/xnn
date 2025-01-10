@@ -43,6 +43,7 @@ double Utils::SigmoidDerivative(double x)
 double Utils::Relu(double x, double max)
 {
 	double r = x / max;
+
 	return r < 0 ? 0 : r;
 }
 

@@ -73,16 +73,14 @@ void Neuron::SetValueFromSample(imagesample *pSample, int index)
 }
 
 
-void Neuron::BackPropagateError(double error, int layer, double rate)
+void Neuron::BackPropagateError(double din, int layer, double rate)
 {
-	for (Connection* p : _vecConnectionsBackward)
-	{
+	double d = _value * (1.0 - _value) * din * Utils::SigmoidDerivative(_value);
 		
-		double d = p->_parent->_value * error;
-
-		p->_weight -= rate * d;
-		p->_weight = max(p->_weight, DBL_EPSILON);
-		p->_parent->BackPropagateError(d, layer + 1, rate);
+	for (Connection* p : _vecConnectionsBackward)
+	{	
+		p->_parent->BackPropagateError(d * p->_weight, layer + 1, rate);
+		p->_weight = (rate * din * p->_parent->_value) + p->_weight;
 	}
 }
 

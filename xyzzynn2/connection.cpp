@@ -8,7 +8,7 @@ Connection::Connection(double weight)
 
 Connection::Connection()
 {
-	_weight = Utils::RandomDouble(0.00001,1.0);
+	_weight = Utils::RandomDouble(0.0000001,1.0);
 }
 
 Connection::~Connection()

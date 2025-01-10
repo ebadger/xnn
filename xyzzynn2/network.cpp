@@ -221,7 +221,8 @@ void Network::PropagateForward(imagesample *pSample)
 
 			//pNeuron->_value += pNeuron->_bias;
 			//double sigval = Utils::Sigmoid(pNeuron->_value);
-			double sigval = Utils::Relu(pNeuron->_value, (double)pNeuron->_vecConnectionsBackward.size());
+			//double sigval = Utils::Relu(pNeuron->_value, (double)pNeuron->_vecConnectionsBackward.size());
+			double sigval = Utils::Sigmoid(pNeuron->_value);
 			//wprintf(L"neuron=%f, sig=%f\n", pNeuron->_value, sigval);
 			pNeuron->_value = sigval;
 		}
@@ -248,7 +249,7 @@ double Network::BatchForward(imagesample* pSample, uint8_t label)
 	for (Neuron* pNeuron : pOutputLayer->_vecNeurons)
 	{
 		double cost = 0.0;
-		expected = 0.0;
+		expected = 0.00001;
 		double out = pNeuron->_value;
 
 		if (isnan(out))
@@ -261,32 +262,14 @@ double Network::BatchForward(imagesample* pSample, uint8_t label)
 			expected = 1.0;
 		}
 
-		cost = out - expected;
+		cost = expected - out;
 
-		
-		if (isnan(cost))
-		{
-			cost = 0;
-		}
-
-		pNeuron->_vecCostBatch.push_back(2.0 * cost);
+		pNeuron->_vecCostBatch.push_back(cost);
 
 		cost = (cost * cost);
 
 		totalcost += cost;
 		digit++;
-
-
-		// cache the average neuron weight for each neuron in the layer
-		for (Layer* l : _vecLayers)
-		{
-			l->_totalNeuronScore = 0.0;
-			for (Neuron* n : l->_vecNeurons)
-			{
-				l->_totalNeuronScore += n->_value;
-			}
-		}
-
 	}
 
 	//wprintf(L"\n");
