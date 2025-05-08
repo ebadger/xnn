@@ -89,8 +89,7 @@ void Simulator::CreateNetwork()
 {
 	_pNetwork = new Network();
 	_pNetwork->AddLayer(784, 0); // input layer
-	_pNetwork->AddLayer(100, 0);  // hidden layer
-	_pNetwork->AddLayer(100, 0);  // hidden layer
+	_pNetwork->AddLayer(1000, 0);  // hidden layer
 	_pNetwork->AddLayer(10, 0);  // output layer
 
 	_pNetwork->CreateConnections();
