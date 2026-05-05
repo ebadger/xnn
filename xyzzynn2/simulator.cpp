@@ -89,7 +89,7 @@ void Simulator::CreateNetwork()
 {
 	_pNetwork = new Network();
 	_pNetwork->AddLayer(784, 0); // input layer
-	_pNetwork->AddLayer(1000, 0);  // hidden layer
+	_pNetwork->AddLayer(256, 0);  // hidden layer
 	_pNetwork->AddLayer(10, 0);  // output layer
 
 	_pNetwork->CreateConnections();
@@ -123,6 +123,7 @@ void Simulator::Learn(double rate, int32_t epochs, int32_t trainLimit)
 	//DumpNetwork();
 
 	wprintf(L"learn parameters: rate=%f, epochs=%d\n", rate, epochs);
+	std::mt19937 rng(std::random_device{}()); // Seed the generator
 
 	for (int32_t epoch = 0; epoch < epochs; epoch++)
 	{
@@ -137,13 +138,15 @@ void Simulator::Learn(double rate, int32_t epochs, int32_t trainLimit)
 
 		vector<int> vecOrder;
 		uint32_t iTraining = min(_imagesTraining.Items(), (uint32_t)trainLimit);
+		vecOrder.reserve(_imagesTraining.Items());
 
 		for (uint32_t i = 0; i < _imagesTraining.Items(); i++)
 		{
 			vecOrder.push_back(i);
 		}
 
-		auto rng = std::default_random_engine{};
+		// Use the per-Learn() rng seeded outside this loop so each epoch
+		// gets a different permutation.
 		std::shuffle(std::begin(vecOrder), std::end(vecOrder), rng);
 
 		uint32_t timeStarted = GetTickCount();
@@ -163,7 +166,7 @@ void Simulator::Learn(double rate, int32_t epochs, int32_t trainLimit)
 			double cost = _pNetwork->BatchForward(pSample, label);
 			totalcost += cost;
 
-			_pNetwork->BatchBackward(rate);
+			_pNetwork->PropagateBackward(label, rate);
 			
 			if (i == 29)
 			{

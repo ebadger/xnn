@@ -16,6 +16,4 @@ public:
 	Neuron *_parent		= nullptr;
 	Neuron *_child		= nullptr;
 	double _weight		= 0.0;
-	double _originalWeight = 0.0;
-
 };

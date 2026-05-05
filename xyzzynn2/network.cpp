@@ -29,12 +29,15 @@ bool Network::CreateConnections()
 	{
 		Layer *parent = _vecLayers[i];
 		Layer *child = _vecLayers[i + 1];
+        double limit  = std::sqrt(6.0 / (parent->_vecNeurons.size() + child->_vecNeurons.size()));
 
 		for (Neuron *pParentNeuron : parent->_vecNeurons)
 		{
 			for (Neuron *pChildNeuron : child->_vecNeurons)
 			{
 				pParentNeuron->AddConnection(pChildNeuron);
+				pParentNeuron->_vecConnectionsForward.back()->_weight =
+                Utils::RandomDouble(-limit, limit);
 			}
 		}
 	}
@@ -214,12 +217,8 @@ void Network::PropagateForward(imagesample *pSample)
 			}
 
 			pNeuron->_value = v;
-			if (isnan(pNeuron->_value))
-			{
-				pNeuron->_value = 0.0;
-			}
 
-			//pNeuron->_value += pNeuron->_bias;
+			pNeuron->_value += pNeuron->_bias;
 			//double sigval = Utils::Sigmoid(pNeuron->_value);
 			//double sigval = Utils::Relu(pNeuron->_value, (double)pNeuron->_vecConnectionsBackward.size());
 			double sigval = Utils::Sigmoid(pNeuron->_value);
@@ -249,13 +248,9 @@ double Network::BatchForward(imagesample* pSample, uint8_t label)
 	for (Neuron* pNeuron : pOutputLayer->_vecNeurons)
 	{
 		double cost = 0.0;
-		expected = 0.00001;
+		expected = 0;
 		double out = pNeuron->_value;
 
-		if (isnan(out))
-		{
-			out = 0.0;
-		}
 
 		if (label == (uint8_t)digit)
 		{
@@ -263,8 +258,6 @@ double Network::BatchForward(imagesample* pSample, uint8_t label)
 		}
 
 		cost = expected - out;
-
-		pNeuron->_vecCostBatch.push_back(cost);
 
 		cost = (cost * cost);
 
@@ -278,93 +271,6 @@ double Network::BatchForward(imagesample* pSample, uint8_t label)
 
 	return totalcost;
 }
-
-void Network::BatchBackward(double learnRate)
-{
-	Layer* pOutputLayer = _vecLayers[_vecLayers.size() - 1];
-	int digit = 0;
-	double totalcost = 0.0;
-	double expected = 0.0;
-
-	//wprintf(L"%d,", label);
-
-	if (pOutputLayer->_vecNeurons[0]->_vecCostBatch.size() == 0)
-	{
-		return;
-	}
-
-	for (Neuron* pNeuron : pOutputLayer->_vecNeurons)
-	{
-		double costAvg = 0.0;
-
-		for (double c : pNeuron->_vecCostBatch)
-		{
-			costAvg += c;
-		}
-
-		costAvg = costAvg / pNeuron->_vecCostBatch.size();
-		pNeuron->_vecCostBatch.clear();
-
-		//wprintf(L"out=%f,cost=%f\n", out, cost);
-		pNeuron->BackPropagateError(costAvg, 0, learnRate);
-	}
-}
-
-#if 0
-double Network::Learn(imagesample *pSample, uint8_t label, uint32_t epoch, double rate)
-{
-	Layer *pInputLayer = _vecLayers[0];
-	
-	pInputLayer->LoadInputLayer(pSample);
-
-	PropagateForward(pSample);
-
-	// now look at the output layer
-
-	Layer *pOutputLayer = _vecLayers[_vecLayers.size() - 1];
-	int digit = 0;
-	double totalcost = 0.0;
-	double expected = 0.0;
-
-	//wprintf(L"%d,", label);
-
-	for (Neuron *pNeuron : pOutputLayer->_vecNeurons)
-	{
-		double cost = 0.0;
-		expected = 0.0;
-		double out = pNeuron->_value;
-
-		if (isnan(out))
-		{
-			out = 0.0;
-		}
-
-		if (label == (uint8_t)digit)
-		{
-			expected = 1.0;
-		}
-
-		cost = (cost * cost);
-
-		if (isnan(cost))
-		{
-			cost = 0;
-		}
-
-		//wprintf(L"out=%f,cost=%f\n", out, cost);
-		pNeuron->BackPropagateError(cost, 0, rate);
-
-		totalcost += cost;	
-		digit++;
-	}
-	
-	//wprintf(L"\n");
-
-	//wprintf(L"totalcost %f\n", totalcost);
-
-	return totalcost;
-}
-#endif
 
 
 bool Network::AccuracyTest(imagesample *pSample, uint8_t label, uint8_t*pbGuess)
@@ -410,3 +316,42 @@ bool Network::AccuracyTest(imagesample *pSample, uint8_t label, uint8_t*pbGuess)
 
 }
 
+void Network::PropagateBackward(uint8_t label, double rate)
+{
+    // 1) δ at the output layer
+    Layer* pOut = _vecLayers.back();
+    for (size_t k = 0; k < pOut->_vecNeurons.size(); ++k)
+    {
+        Neuron* n = pOut->_vecNeurons[k];
+        double y = (label == (uint8_t)k) ? 1.0 : 0.0;
+        double dLda = n->_value - y;          // d(½(a-y)²)/da
+        n->_delta  = dLda * n->_value * (1.0 - n->_value); // σ'(z) for sigmoid
+    }
+
+    // 2) δ for every hidden layer, back to (but not including) the input
+    for (int l = (int)_vecLayers.size() - 2; l >= 1; --l)
+    {
+        for (Neuron* j : _vecLayers[l]->_vecNeurons)
+        {
+            double sum = 0.0;
+            for (Connection* p : j->_vecConnectionsForward)   // children
+            {
+                sum += p->_weight * p->_child->_delta;        // Σ w_kj · δ_k
+            }
+            j->_delta = sum * j->_value * (1.0 - j->_value);  // σ'(z_j)
+        }
+    }
+
+    // 3) Apply weight + bias updates (now that all δ are known)
+    for (size_t l = 1; l < _vecLayers.size(); ++l)
+    {
+        for (Neuron* j : _vecLayers[l]->_vecNeurons)
+        {
+            for (Connection* p : j->_vecConnectionsBackward)  // parents
+            {
+                p->_weight -= rate * j->_delta * p->_parent->_value;
+            }
+            j->_bias -= rate * j->_delta;
+        }
+    }
+}

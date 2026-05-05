@@ -9,12 +9,11 @@ public:
 	bool LoadNetwork(const wchar_t *wzFileName);
 	void SaveNetwork(const wchar_t *wzFileName);
 	void OutputNetworkInfo();
-	void Clear();
-
+	void Clear();	
 	double CalculateCost(imagesample *pSample, uint8_t label);
 	double BatchForward(imagesample* pSample, uint8_t label);
-	void BatchBackward(double learnRate);
-	//double Learn(imagesample *pSample, uint8_t label, uint32_t epoch, double rate);
+	void PropagateBackward(uint8_t label, double rate);
+
 	bool AccuracyTest(imagesample *pSample, uint8_t label, uint8_t *pbGuess);
 	void PropagateForward(imagesample *pSample);
 	void Serialize(ofstream &stream);
