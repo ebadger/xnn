@@ -23,9 +23,12 @@ private:
 template <class T>
 HRESULT FileMappingReadOnly<T>::Initialize(const WCHAR *wzFileName, UINT32 uiHeaderBytes)
 {
-	UINT32 uiCount = 10;
-	UINT32 initSize = 0;
 	m_uiHeaderBytes = uiHeaderBytes;
+	m_uiCount       = 0;
+	m_pItems        = nullptr;
+	m_pBuf          = nullptr;
+	m_hMap          = nullptr;
+	m_hFile         = INVALID_HANDLE_VALUE;
 
 	if (!wzFileName)
 	{
@@ -34,45 +37,72 @@ HRESULT FileMappingReadOnly<T>::Initialize(const WCHAR *wzFileName, UINT32 uiHea
 
 	StringCchPrintf(m_wcPath, _countof(m_wcPath), wzFileName);
 
+	// Open truly read-only with full sharing so multiple instances of the
+	// process can map the same MNIST data files concurrently.
 	m_hFile = CreateFile(m_wcPath,
-						GENERIC_WRITE | GENERIC_READ,
-						FILE_SHARE_READ,
-						nullptr,
-						OPEN_EXISTING, 
-						FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, 
-						NULL);
+		GENERIC_READ,
+		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+		nullptr,
+		OPEN_EXISTING,
+		FILE_ATTRIBUTE_NORMAL,
+		NULL);
 
-	if (INVALID_HANDLE_VALUE == m_hFile || 0 == m_hFile)
+	if (INVALID_HANDLE_VALUE == m_hFile)
 	{
-		return E_FAIL;
+		DWORD err = GetLastError();
+		WCHAR cdir[MAX_PATH] = {0};
+		GetCurrentDirectoryW(MAX_PATH, cdir);
+		wprintf(L"FileMappingReadOnly: CreateFile failed for %s in %s (error %lu%s)\r\n",
+			m_wcPath, cdir, err,
+			err == ERROR_SHARING_VIOLATION ? L" - file locked by another process" :
+			err == ERROR_FILE_NOT_FOUND    ? L" - file not found" :
+			err == ERROR_ACCESS_DENIED     ? L" - access denied" : L"");
+		m_hFile = INVALID_HANDLE_VALUE;
+		return HRESULT_FROM_WIN32(err);
 	}
 
-	CheckConditionFailFast(m_hFile != nullptr && m_hFile != INVALID_HANDLE_VALUE);
-	
+	// Unnamed read-only mapping. Naming the mapping with the file path was
+	// both invalid (paths contain ':' / '\\') and a guaranteed collision
+	// across processes; an anonymous mapping is the right thing here.
 	m_hMap = CreateFileMapping(
 		m_hFile,
-		nullptr,                 // default security
-		PAGE_READWRITE,          // read/write access
-		0,                       // max. object size
-		initSize,                // buffer size
-		m_wcPath);               // name of mapping object
+		nullptr,
+		PAGE_READONLY,
+		0,
+		0,
+		nullptr);
 
-	CheckConditionFailFast(m_hMap != NULL && m_hMap != INVALID_HANDLE_VALUE);
+	if (m_hMap == NULL)
+	{
+		DWORD err = GetLastError();
+		wprintf(L"FileMappingReadOnly: CreateFileMapping failed for %s (error %lu)\r\n",
+			m_wcPath, err);
+		CloseHandle(m_hFile);
+		m_hFile = INVALID_HANDLE_VALUE;
+		return HRESULT_FROM_WIN32(err);
+	}
 
-	m_pBuf = (BYTE *)MapViewOfFile(m_hMap,   // handle to map object
-		FILE_MAP_ALL_ACCESS, // read/write permission
+	m_pBuf = (BYTE *)MapViewOfFile(m_hMap,
+		FILE_MAP_READ,
 		0,
 		0,
 		0);
 
-	CheckConditionFailFast(m_pBuf != nullptr);
-
-	UINT32 uiTemp = 0;
+	if (m_pBuf == nullptr)
+	{
+		DWORD err = GetLastError();
+		wprintf(L"FileMappingReadOnly: MapViewOfFile failed for %s (error %lu)\r\n",
+			m_wcPath, err);
+		CloseHandle(m_hMap);
+		CloseHandle(m_hFile);
+		m_hMap  = nullptr;
+		m_hFile = INVALID_HANDLE_VALUE;
+		return HRESULT_FROM_WIN32(err);
+	}
 
 	m_uiMagicNumber = Utils::LittleToBigEndian(*(UINT32 *)m_pBuf);
-
-	m_uiCount = Utils::LittleToBigEndian(*(UINT32 *)(m_pBuf + sizeof(UINT32)));
-	m_pItems = (T *)(m_pBuf + m_uiHeaderBytes);
+	m_uiCount       = Utils::LittleToBigEndian(*(UINT32 *)(m_pBuf + sizeof(UINT32)));
+	m_pItems        = (T *)(m_pBuf + m_uiHeaderBytes);
 
 	return S_OK;
 }
@@ -80,8 +110,21 @@ HRESULT FileMappingReadOnly<T>::Initialize(const WCHAR *wzFileName, UINT32 uiHea
 template <class T>
 HRESULT FileMappingReadOnly<T>::Cleanup()
 {
-	CloseHandle(m_hMap);
-	CloseHandle(m_hFile);
+	if (m_pBuf)
+	{
+		UnmapViewOfFile(m_pBuf);
+		m_pBuf = nullptr;
+	}
+	if (m_hMap)
+	{
+		CloseHandle(m_hMap);
+		m_hMap = nullptr;
+	}
+	if (m_hFile != INVALID_HANDLE_VALUE && m_hFile != nullptr)
+	{
+		CloseHandle(m_hFile);
+		m_hFile = INVALID_HANDLE_VALUE;
+	}
 
 	return S_OK;
 }

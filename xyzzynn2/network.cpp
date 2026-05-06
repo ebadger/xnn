@@ -1,17 +1,80 @@
 #include "pch.h"
+#include <random>
+#include <cstring>
 
-bool Network::AddLayer(int iNeurons, double multiplier)
+// ----------------------------------------------------------------------------
+// Helpers
+// ----------------------------------------------------------------------------
+
+static inline float Sigmoidf(float x)
+{
+	return 1.0f / (1.0f + std::exp(-x));
+}
+
+void Network::ApplyActivation(uint32_t activation, float* pNeurons, uint32_t count)
+{
+	switch (activation)
+	{
+	case XnnAct_Sigmoid:
+		for (uint32_t j = 0; j < count; ++j)
+		{
+			pNeurons[j] = Sigmoidf(pNeurons[j]);
+		}
+		break;
+	case XnnAct_Relu:
+		for (uint32_t j = 0; j < count; ++j)
+		{
+			float v = pNeurons[j];
+			pNeurons[j] = v < 0.0f ? 0.0f : v;
+		}
+		break;
+	case XnnAct_None:
+	default:
+		break;
+	}
+}
+
+void Network::LoadInputLayer(const imagesample* pSample)
+{
+	const LayerDesc& in = _layers[0];
+	float* pVal = _values.data() + in.neuronOffset;
+	const uint8_t* pPx = pSample->pixels;
+	const uint32_t n = in.neuronCount;
+	CheckConditionFailFast(n == 784);
+	// Same normalization as the original code (Utils::Relu(pixel, 255)) which
+	// is just pixel/255 since pixels are unsigned bytes.
+	const float inv = 1.0f / 255.0f;
+	for (uint32_t i = 0; i < n; ++i)
+	{
+		pVal[i] = (float)pPx[i] * inv;
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Construction / topology
+// ----------------------------------------------------------------------------
+
+bool Network::AddLayer(uint32_t neurons, double /*multiplier*/)
 {
 	if (_fInitialized)
 	{
 		return false;
 	}
 
-	Layer *pLayer = new Layer(multiplier);
-	pLayer->CreateNeurons(iNeurons);
-	
-	_vecLayers.push_back(pLayer);
+	LayerDesc d{};
+	d.neuronCount     = neurons;
+	d.neuronOffset    = (uint32_t)_values.size();        // before resize
+	d.prevNeuronCount = _layers.empty() ? 0u : _layers.back().neuronCount;
+	d.weightOffset    = (uint32_t)_weights.size();       // before resize
+	d.activation      = _layers.empty() ? XnnAct_None : XnnAct_Sigmoid;
 
+	const size_t weightsForThisLayer = (size_t)neurons * (size_t)d.prevNeuronCount;
+	_weights.resize(_weights.size() + weightsForThisLayer, 0.0f);
+	_biases.resize(_biases.size() + neurons, 0.0f);
+	_values.resize(_values.size() + neurons, 0.0f);
+	_deltas.resize(_deltas.size() + neurons, 0.0f);
+
+	_layers.push_back(d);
 	return true;
 }
 
@@ -22,336 +85,341 @@ bool Network::CreateConnections()
 		return false;
 	}
 
-	// each neuron in the layer connects to each neuron in layer + 1
-	// and back
+	// Xavier/Glorot uniform: limit = sqrt(6 / (fan_in + fan_out)).
+	std::mt19937 rng(std::random_device{}());
 
-	for (uint32_t i = 0; i < _vecLayers.size() - 1; i++)
+	for (size_t l = 1; l < _layers.size(); ++l)
 	{
-		Layer *parent = _vecLayers[i];
-		Layer *child = _vecLayers[i + 1];
-        double limit  = std::sqrt(6.0 / (parent->_vecNeurons.size() + child->_vecNeurons.size()));
+		const LayerDesc& curr = _layers[l];
+		const uint32_t fanIn  = curr.prevNeuronCount;
+		const uint32_t fanOut = curr.neuronCount;
+		const float limit = (float)std::sqrt(6.0 / (double)(fanIn + fanOut));
+		std::uniform_real_distribution<float> dist(-limit, limit);
 
-		for (Neuron *pParentNeuron : parent->_vecNeurons)
+		float* W = _weights.data() + curr.weightOffset;
+		const size_t count = (size_t)fanOut * (size_t)fanIn;
+		for (size_t k = 0; k < count; ++k)
 		{
-			for (Neuron *pChildNeuron : child->_vecNeurons)
-			{
-				pParentNeuron->AddConnection(pChildNeuron);
-				pParentNeuron->_vecConnectionsForward.back()->_weight =
-                Utils::RandomDouble(-limit, limit);
-			}
+			W[k] = dist(rng);
 		}
+		// Biases default to zero (already zero-initialized above).
 	}
 
+	_fInitialized = true;
 	return true;
 }
 
-
-double Network::CalculateCost(imagesample *pSample, uint8_t label)
-{
-	double cost = 0.0;
-
-	Layer *pInputLayer = _vecLayers[0];
-	int i = 0;
-
-	for (Neuron *pNeuron : pInputLayer->_vecNeurons)
-	{
-		CheckConditionFailFast(i < 784);
-		// set initial activation value
-		pNeuron->_value = pSample->pixels[i++];
-	}
-
-	for (UINT l = 1; l < _vecLayers.size(); l++)
-	{
-		Layer *pLayer = _vecLayers[l];
-
-		for (Neuron *pNeuron : pLayer->_vecNeurons)
-		{
-			pNeuron->_value = 0.0;
-
-			for (Connection *pConnection : pNeuron->_vecConnectionsBackward)
-			{
-				pNeuron->_value += (pConnection->_parent->_value) * (pConnection->_weight);
-			}
-
-			pNeuron->_value += pNeuron->_bias;
-			pNeuron->_value = Utils::Sigmoid(pNeuron->_value);
-			//wprintf(L"value=%f\r\n", pNeuron->_value);
-		}
-	}
-	
-	// now look at the output layer
-
-	Layer *pOutputLayer = _vecLayers[_vecLayers.size() - 1];
-	int j = 0;
-	for (Neuron *pNeuron : pOutputLayer->_vecNeurons)
-	{
-		CheckConditionFailFast(j < 0x256);
-		double expected = 0.0;
-		double actual = 0.0;
-		if (label == (uint8_t)j)
-		{
-			expected = 1.0;
-		}
-
-		actual = expected - pNeuron->_value;
-		actual = actual * actual;
-		cost += actual;
-		//wprintf(L"%d: %f, %f\r\n", j++, pNeuron->_value, actual);
-
-		j++;
-	}
-
-	return cost;
-}
-
-
 void Network::Clear()
 {
-	for (Layer *p : _vecLayers)
-	{
-		delete p;
-	}
-	_vecLayers.clear();
+	_layers.clear();
+	_weights.clear();
+	_biases.clear();
+	_values.clear();
+	_deltas.clear();
+	_fInitialized = false;
 }
 
 void Network::OutputNetworkInfo()
 {
-	wprintf(L"Layers: %d [", (uint32_t)_vecLayers.size());
-	
-	for (Layer* l : _vecLayers)
+	wprintf(L"Layers: %u [", (uint32_t)_layers.size());
+	for (const LayerDesc& d : _layers)
 	{
-		wprintf(L" %d ", (uint32_t)l->_vecNeurons.size());
+		wprintf(L" %u ", d.neuronCount);
 	}
-
 	wprintf(L"]\r\n");
+	wprintf(L"  totalNeurons=%zu  totalWeights=%zu  bytes(weights)=%zu\r\n",
+	        _values.size(), _weights.size(), _weights.size() * sizeof(float));
 }
 
-bool Network::LoadNetwork(const wchar_t *wzFileName)
+// ----------------------------------------------------------------------------
+// File I/O
+// ----------------------------------------------------------------------------
+
+bool Network::LoadNetwork(const wchar_t* wzFileName)
 {
 	Clear();
 
-	ifstream istream;
-	istream.open(wzFileName, ios::in | ios::binary);
-
-	if (istream.is_open())
-	{
-		// read the # of layers
-		size_t layers = 0;
-		istream.read((char *)&layers, sizeof(size_t));
-		
-		wprintf(L"read %zd layers\n", layers);
-
-		for (size_t i = 0; i < layers; i++)
-		{
-			Layer *pLayer = new Layer(0.0);
-			_vecLayers.push_back(pLayer);
-
-			Layer *pParent = nullptr;
-
-			if (i > 0)
-			{
-				pParent = _vecLayers[i - 1];
-			}
-
-			pLayer->DeSerialize(istream, pParent);
-		}
-
-		wprintf(L"loaded: %s\r\n", wzFileName);
-		OutputNetworkInfo();
-
-		return true;
-	}
-	else
+	std::ifstream is;
+	is.open(wzFileName, std::ios::in | std::ios::binary);
+	if (!is.is_open())
 	{
 		WCHAR cdir[MAX_PATH];
 		GetCurrentDirectoryW(MAX_PATH, cdir);
 		wprintf(L"Failed to open %s in dir: %s\r\n", wzFileName, cdir);
 		return false;
 	}
-}
 
-void Network::SaveNetwork(const wchar_t *wzFileName)
-{
-	std::ofstream ostream;
-	ostream.open(wzFileName, ios::binary);
-	
-	if (ostream.is_open())
+	XnnHeader hdr{};
+	is.read((char*)&hdr, sizeof(hdr));
+	if (!is || hdr.magic != XNN_MAGIC)
 	{
-		Serialize(ostream);
-		wprintf(L"saved: %s\n", wzFileName);
+		wprintf(L"%s: not an XNN1 file (magic=0x%08x)\r\n", wzFileName, hdr.magic);
+		return false;
+	}
+	if (hdr.version != XNN_VERSION || hdr.dtype != XNN_DTYPE_F32)
+	{
+		wprintf(L"%s: unsupported version=%u dtype=%u\r\n",
+		        wzFileName, hdr.version, hdr.dtype);
+		return false;
 	}
 
-	ostream.close();
-
-}
-
-void Network::Serialize(ofstream &stream)
-{
-	size_t layers = _vecLayers.size();
-	stream.write((const char *)&layers, sizeof(size_t));
-
-	for (Layer *p : _vecLayers)
+	_layers.resize(hdr.layerCount);
+	is.read((char*)_layers.data(), (std::streamsize)(sizeof(LayerDesc) * hdr.layerCount));
+	if (!is)
 	{
-		p->Serialize(stream);
+		wprintf(L"%s: truncated layer table\r\n", wzFileName);
+		Clear();
+		return false;
 	}
+
+	_weights.resize((size_t)hdr.totalWeights);
+	_biases.resize((size_t)hdr.totalNeurons);
+	_values.resize((size_t)hdr.totalNeurons, 0.0f);
+	_deltas.resize((size_t)hdr.totalNeurons, 0.0f);
+
+	is.seekg((std::streamoff)hdr.weightsOffset, std::ios::beg);
+	is.read((char*)_weights.data(), (std::streamsize)(_weights.size() * sizeof(float)));
+	if (!is)
+	{
+		wprintf(L"%s: truncated weight blob\r\n", wzFileName);
+		Clear();
+		return false;
+	}
+
+	is.seekg((std::streamoff)hdr.biasesOffset, std::ios::beg);
+	is.read((char*)_biases.data(), (std::streamsize)(_biases.size() * sizeof(float)));
+	if (!is)
+	{
+		wprintf(L"%s: truncated bias blob\r\n", wzFileName);
+		Clear();
+		return false;
+	}
+
+	_fInitialized = true;
+	wprintf(L"loaded: %s\r\n", wzFileName);
+	OutputNetworkInfo();
+	return true;
 }
 
-void Network::PropagateForward(imagesample *pSample)
+void Network::SaveNetwork(const wchar_t* wzFileName)
 {
-	// start with the first hidden layer
-	for (UINT l = 1; l < _vecLayers.size(); l++)
+	std::ofstream os;
+	os.open(wzFileName, std::ios::out | std::ios::binary | std::ios::trunc);
+	if (!os.is_open())
 	{
-		Layer *pLayer = _vecLayers[l];
+		wprintf(L"failed to open for write: %s\r\n", wzFileName);
+		return;
+	}
 
-		for (Neuron *pNeuron : pLayer->_vecNeurons)
+	XnnHeader hdr{};
+	hdr.magic        = XNN_MAGIC;
+	hdr.version      = XNN_VERSION;
+	hdr.dtype        = XNN_DTYPE_F32;
+	hdr.layerCount   = (uint32_t)_layers.size();
+	hdr.totalNeurons = (uint64_t)_biases.size();
+	hdr.totalWeights = (uint64_t)_weights.size();
+
+	const uint64_t afterTable =
+		(uint64_t)sizeof(XnnHeader) + (uint64_t)sizeof(LayerDesc) * hdr.layerCount;
+	const uint64_t aligned = (afterTable + (XNN_PAGE - 1)) & ~(uint64_t)(XNN_PAGE - 1);
+	hdr.weightsOffset = aligned;
+	hdr.biasesOffset  = aligned + hdr.totalWeights * sizeof(float);
+
+	os.write((const char*)&hdr, sizeof(hdr));
+	os.write((const char*)_layers.data(), (std::streamsize)(sizeof(LayerDesc) * _layers.size()));
+
+	// Pad to page-aligned weights offset.
+	const uint64_t padBytes = hdr.weightsOffset - afterTable;
+	if (padBytes > 0)
+	{
+		std::vector<char> zero((size_t)padBytes, 0);
+		os.write(zero.data(), (std::streamsize)padBytes);
+	}
+
+	os.write((const char*)_weights.data(), (std::streamsize)(_weights.size() * sizeof(float)));
+	os.write((const char*)_biases.data(),  (std::streamsize)(_biases.size()  * sizeof(float)));
+
+	wprintf(L"saved: %s\r\n", wzFileName);
+}
+
+// ----------------------------------------------------------------------------
+// Forward
+// ----------------------------------------------------------------------------
+
+void Network::PropagateForward(imagesample* /*pSample*/)
+{
+	// Caller is expected to have already loaded inputs via LoadInputLayer().
+	// Walk forward through the dense weight matrices.
+	for (size_t l = 1; l < _layers.size(); ++l)
+	{
+		const LayerDesc& curr = _layers[l];
+		const LayerDesc& prev = _layers[l - 1];
+
+		const float* W      = _weights.data() + curr.weightOffset;
+		const float* prevA  = _values.data()  + prev.neuronOffset;
+		const float* bias   = _biases.data()  + curr.neuronOffset;
+		float*       out    = _values.data()  + curr.neuronOffset;
+
+		const uint32_t fanOut = curr.neuronCount;
+		const uint32_t fanIn  = curr.prevNeuronCount;
+
+		// out[j] = bias[j] + sum_i W[j*fanIn + i] * prevA[i]
+		for (uint32_t j = 0; j < fanOut; ++j)
 		{
-			//double preval = pNeuron->_value;
-			double v = 0.0;
-
-			// look back to the previous layer to calculate neuron scores at this layer
-			for (Connection *pConnection : pNeuron->_vecConnectionsBackward)
+			const float* Wrow = W + (size_t)j * fanIn;
+			float sum = bias[j];
+			for (uint32_t i = 0; i < fanIn; ++i)
 			{
-				//double pw = pConnection->_parent->_value;
-				//v += (pw * (1 - pw)) * pConnection->_weight;
-				v += pConnection->_weight * pConnection->_parent->_value;
+				sum += Wrow[i] * prevA[i];
 			}
-
-			pNeuron->_value = v;
-
-			pNeuron->_value += pNeuron->_bias;
-			//double sigval = Utils::Sigmoid(pNeuron->_value);
-			//double sigval = Utils::Relu(pNeuron->_value, (double)pNeuron->_vecConnectionsBackward.size());
-			double sigval = Utils::Sigmoid(pNeuron->_value);
-			//wprintf(L"neuron=%f, sig=%f\n", pNeuron->_value, sigval);
-			pNeuron->_value = sigval;
+			out[j] = sum;
 		}
+
+		ApplyActivation(curr.activation, out, fanOut);
 	}
+}
+
+double Network::CalculateCost(imagesample* pSample, uint8_t label)
+{
+	LoadInputLayer(pSample);
+	PropagateForward(pSample);
+
+	const LayerDesc& outL = _layers.back();
+	const float* out = _values.data() + outL.neuronOffset;
+	double cost = 0.0;
+	for (uint32_t j = 0; j < outL.neuronCount; ++j)
+	{
+		double expected = (label == (uint8_t)j) ? 1.0 : 0.0;
+		double d = expected - (double)out[j];
+		cost += d * d;
+	}
+	return cost;
 }
 
 double Network::BatchForward(imagesample* pSample, uint8_t label)
 {
-	Layer* pInputLayer = _vecLayers[0];
-
-	pInputLayer->LoadInputLayer(pSample);
-
+	LoadInputLayer(pSample);
 	PropagateForward(pSample);
 
-	// now look at the output layer
+	const LayerDesc& outL = _layers.back();
+	const float* out = _values.data() + outL.neuronOffset;
 
-	Layer* pOutputLayer = _vecLayers[_vecLayers.size() - 1];
-	int digit = 0;
-	double totalcost = 0.0;
-	double expected = 0.0;
-
-	//wprintf(L"%d,", label);
-
-	for (Neuron* pNeuron : pOutputLayer->_vecNeurons)
+	double total = 0.0;
+	for (uint32_t j = 0; j < outL.neuronCount; ++j)
 	{
-		double cost = 0.0;
-		expected = 0;
-		double out = pNeuron->_value;
-
-
-		if (label == (uint8_t)digit)
-		{
-			expected = 1.0;
-		}
-
-		cost = expected - out;
-
-		cost = (cost * cost);
-
-		totalcost += cost;
-		digit++;
+		double expected = (label == (uint8_t)j) ? 1.0 : 0.0;
+		double d = expected - (double)out[j];
+		total += d * d;
 	}
-
-	//wprintf(L"\n");
-
-	//wprintf(L"totalcost %f\n", totalcost);
-
-	return totalcost;
+	return total;
 }
 
-
-bool Network::AccuracyTest(imagesample *pSample, uint8_t label, uint8_t*pbGuess)
+bool Network::AccuracyTest(imagesample* pSample, uint8_t label, uint8_t* pbGuess)
 {
-	double cost = 0.0;
 	*pbGuess = 0xFF;
-	Layer *pInputLayer = _vecLayers[0];
-	pInputLayer->LoadInputLayer(pSample);
 
+	LoadInputLayer(pSample);
 	PropagateForward(pSample);
 
-	// now look at the output layer
+	const LayerDesc& outL = _layers.back();
+	const float* out = _values.data() + outL.neuronOffset;
 
-	Layer *pOutputLayer = _vecLayers[_vecLayers.size() - 1];
-	int j = 0;
-	int maxj = 0;
-	double maxvalue = 0.0;
-
-	for (Neuron *pNeuron : pOutputLayer->_vecNeurons)
+	uint32_t maxJ = 0;
+	float    maxV = -std::numeric_limits<float>::infinity();
+	for (uint32_t j = 0; j < outL.neuronCount; ++j)
 	{
-		CheckConditionFailFast(j < 0x256);
-
-		if (pNeuron->_value > maxvalue)
+		if (out[j] > maxV)
 		{
-			maxj = j;
-			maxvalue = pNeuron->_value;
+			maxV = out[j];
+			maxJ = j;
 		}
-
-		j++;
 	}
 
-
-	*pbGuess = maxj;
-
-	if (label == (uint8_t)maxj)
-	{
-		return true;
-	}
-	else
-	{
-		return false;
-	}
-
+	*pbGuess = (uint8_t)maxJ;
+	return label == (uint8_t)maxJ;
 }
+
+// ----------------------------------------------------------------------------
+// Backprop
+// ----------------------------------------------------------------------------
 
 void Network::PropagateBackward(uint8_t label, double rate)
 {
-    // 1) δ at the output layer
-    Layer* pOut = _vecLayers.back();
-    for (size_t k = 0; k < pOut->_vecNeurons.size(); ++k)
-    {
-        Neuron* n = pOut->_vecNeurons[k];
-        double y = (label == (uint8_t)k) ? 1.0 : 0.0;
-        double dLda = n->_value - y;          // d(½(a-y)²)/da
-        n->_delta  = dLda * n->_value * (1.0 - n->_value); // σ'(z) for sigmoid
-    }
+	const float fRate = (float)rate;
 
-    // 2) δ for every hidden layer, back to (but not including) the input
-    for (int l = (int)_vecLayers.size() - 2; l >= 1; --l)
-    {
-        for (Neuron* j : _vecLayers[l]->_vecNeurons)
-        {
-            double sum = 0.0;
-            for (Connection* p : j->_vecConnectionsForward)   // children
-            {
-                sum += p->_weight * p->_child->_delta;        // Σ w_kj · δ_k
-            }
-            j->_delta = sum * j->_value * (1.0 - j->_value);  // σ'(z_j)
-        }
-    }
+	// 1) Output-layer delta: dL/da = (a - y); for sigmoid, sigma'(z) = a*(1-a).
+	{
+		const LayerDesc& outL = _layers.back();
+		float* a = _values.data() + outL.neuronOffset;
+		float* d = _deltas.data() + outL.neuronOffset;
+		for (uint32_t j = 0; j < outL.neuronCount; ++j)
+		{
+			float y = (label == (uint8_t)j) ? 1.0f : 0.0f;
+			float aj = a[j];
+			d[j] = (aj - y) * aj * (1.0f - aj);
+		}
+	}
 
-    // 3) Apply weight + bias updates (now that all δ are known)
-    for (size_t l = 1; l < _vecLayers.size(); ++l)
-    {
-        for (Neuron* j : _vecLayers[l]->_vecNeurons)
-        {
-            for (Connection* p : j->_vecConnectionsBackward)  // parents
-            {
-                p->_weight -= rate * j->_delta * p->_parent->_value;
-            }
-            j->_bias -= rate * j->_delta;
-        }
-    }
+	// 2) Hidden-layer deltas, propagating from output back toward input.
+	//    We only go down to layer index 1 (input layer has no delta).
+	for (int l = (int)_layers.size() - 2; l >= 1; --l)
+	{
+		const LayerDesc& curr = _layers[(size_t)l];
+		const LayerDesc& next = _layers[(size_t)l + 1];
+
+		const float* Wnext      = _weights.data() + next.weightOffset; // [next.fanOut x next.fanIn=curr.neuronCount]
+		const float* nextDelta  = _deltas.data()  + next.neuronOffset;
+		const float* currVal    = _values.data()  + curr.neuronOffset;
+		float*       currDelta  = _deltas.data()  + curr.neuronOffset;
+
+		const uint32_t nFanOut = next.neuronCount;
+		const uint32_t nFanIn  = next.prevNeuronCount;   // == curr.neuronCount
+
+		// Zero this layer's deltas, then scatter-add. Iterating the outer loop
+		// over j (next-layer neurons) keeps Wnext access sequential.
+		std::memset(currDelta, 0, sizeof(float) * curr.neuronCount);
+		for (uint32_t j = 0; j < nFanOut; ++j)
+		{
+			const float dj = nextDelta[j];
+			const float* Wrow = Wnext + (size_t)j * nFanIn;
+			for (uint32_t i = 0; i < nFanIn; ++i)
+			{
+				currDelta[i] += Wrow[i] * dj;
+			}
+		}
+
+		// Apply sigmoid derivative in place.
+		for (uint32_t i = 0; i < curr.neuronCount; ++i)
+		{
+			float v = currVal[i];
+			currDelta[i] *= v * (1.0f - v);
+		}
+	}
+
+	// 3) Apply weight + bias updates everywhere except the input layer.
+	for (size_t l = 1; l < _layers.size(); ++l)
+	{
+		const LayerDesc& curr = _layers[l];
+		const LayerDesc& prev = _layers[l - 1];
+
+		float*       W      = _weights.data() + curr.weightOffset;
+		float*       bias   = _biases.data()  + curr.neuronOffset;
+		const float* delta  = _deltas.data()  + curr.neuronOffset;
+		const float* prevA  = _values.data()  + prev.neuronOffset;
+
+		const uint32_t fanOut = curr.neuronCount;
+		const uint32_t fanIn  = curr.prevNeuronCount;
+
+		for (uint32_t j = 0; j < fanOut; ++j)
+		{
+			const float scale = fRate * delta[j];
+			float* Wrow = W + (size_t)j * fanIn;
+			// Streaming write pattern: each weight written once, contiguous.
+			for (uint32_t i = 0; i < fanIn; ++i)
+			{
+				Wrow[i] -= scale * prevA[i];
+			}
+			bias[j] -= scale;
+		}
+	}
 }

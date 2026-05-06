@@ -293,22 +293,16 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClInclude Include="connection.h" />
     <ClInclude Include="failfast.h" />
     <ClInclude Include="filemappingreadonly.h" />
-    <ClInclude Include="Layer.h" />
     <ClInclude Include="network.h" />
-    <ClInclude Include="neuron.h" />
     <ClInclude Include="simulator.h" />
     <ClInclude Include="utils.h" />
     <ClInclude Include="imagesample.h" />
     <ClInclude Include="pch.h" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="connection.cpp" />
-    <ClCompile Include="Layer.cpp" />
     <ClCompile Include="network.cpp" />
-    <ClCompile Include="neuron.cpp" />
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>

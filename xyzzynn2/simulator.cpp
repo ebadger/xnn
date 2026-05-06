@@ -53,15 +53,31 @@ void Simulator::DumpSample(imagesample *pis)
 
 void Simulator::DumpNetwork()
 {
-	for (Layer *pLayer : _pNetwork->_vecLayers)
+	if (!_pNetwork)
 	{
-		wprintf(L"layer: size=%zd\n", pLayer->_vecNeurons.size());
-		for (Neuron *pNeuron : pLayer->_vecNeurons)
+		return;
+	}
+
+	for (size_t l = 0; l < _pNetwork->_layers.size(); ++l)
+	{
+		const LayerDesc& d = _pNetwork->_layers[l];
+		wprintf(L"layer %zu: size=%u, prev=%u, weights=%u\n",
+		        l, d.neuronCount, d.prevNeuronCount,
+		        d.neuronCount * d.prevNeuronCount);
+
+		const float* val = _pNetwork->_values.data() + d.neuronOffset;
+		for (uint32_t j = 0; j < d.neuronCount; ++j)
 		{
-			wprintf(L"\t neuron value=%f: fw=%zd, bw=%zd\n", pNeuron->_value, pNeuron->_vecConnectionsForward.size(), pNeuron->_vecConnectionsBackward.size());
-			for (Connection *pConnection : pNeuron->_vecConnectionsForward)
+			wprintf(L"\t neuron %u value=%f\n", j, val[j]);
+
+			if (d.prevNeuronCount > 0)
 			{
-				wprintf(L"\t\t connection: weight = %f\n", pConnection->_weight);
+				const float* W = _pNetwork->_weights.data()
+				                 + d.weightOffset + (size_t)j * d.prevNeuronCount;
+				for (uint32_t i = 0; i < d.prevNeuronCount; ++i)
+				{
+					wprintf(L"\t\t connection: weight = %f\n", W[i]);
+				}
 			}
 		}
 	}
@@ -88,9 +104,9 @@ void Simulator::SaveNetwork(const wchar_t *wz)
 void Simulator::CreateNetwork()
 {
 	_pNetwork = new Network();
-	_pNetwork->AddLayer(784, 0); // input layer
-	_pNetwork->AddLayer(256, 0);  // hidden layer
-	_pNetwork->AddLayer(10, 0);  // output layer
+	_pNetwork->AddLayer(784); // input layer
+	_pNetwork->AddLayer(256); // hidden layer
+	_pNetwork->AddLayer(10);  // output layer
 
 	_pNetwork->CreateConnections();
 
